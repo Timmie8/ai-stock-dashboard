@@ -1,9 +1,6 @@
 streamlit
-yfinance
 pandas
 numpy
-scikit-learn
-tensorflow
+requests
 plotly
-nltk
-openpyxl
+scikit-learn
