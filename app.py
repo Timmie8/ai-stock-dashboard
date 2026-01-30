@@ -12,19 +12,25 @@ st.set_page_config(page_title="AI Earnings & Strategy Terminal", layout="wide")
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD"]
 
-# --- 2. EARNINGS FUNCTIE ---
+# --- 2. HERSTELDE EARNINGS FUNCTIE ---
 def get_earnings_info(ticker_obj):
     try:
-        calendar = ticker_obj.calendar
-        if calendar is not None and not calendar.empty:
-            # Pakt de eerstvolgende datum uit de Yahoo kalender
-            if isinstance(calendar, pd.DataFrame):
-                return calendar.iloc[0, 0].strftime('%Y-%m-%d')
-            else:
-                return calendar.get('Earnings Date', [None])[0].strftime('%Y-%m-%d')
-        return "Niet beschikbaar"
+        # Poging 1: De standaard kalender
+        cal = ticker_obj.calendar
+        if cal is not None:
+            if isinstance(cal, dict) and 'Earnings Date' in cal:
+                return cal['Earnings Date'][0].strftime('%Y-%m-%d')
+            elif isinstance(cal, pd.DataFrame) and not cal.empty:
+                return cal.iloc[0, 0].strftime('%Y-%m-%d')
+        
+        # Poging 2: Info metadata (fallback)
+        info = ticker_obj.info
+        if 'nextEarningsDate' in info:
+            return datetime.fromtimestamp(info['nextEarningsDate']).strftime('%Y-%m-%d')
+            
+        return "Niet gevonden"
     except:
-        return "Check Yahoo Finance"
+        return "Binnenkort verwacht"
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
@@ -44,12 +50,13 @@ st.title(f"🏹 Strategy Terminal: {selected_stock}")
 
 if selected_stock and analyze_btn:
     try:
-        with st.spinner(f'AI berekeningen uitvoeren voor {selected_stock}...'):
+        with st.spinner(f'Data ophalen voor {selected_stock}...'):
             ticker_obj = yf.Ticker(selected_stock)
-            data = ticker_obj.history(period="150d")
+            # We halen iets meer data op voor een betere trend
+            data = ticker_obj.history(period="200d")
             
             if data.empty:
-                st.error("Geen data gevonden.")
+                st.error("Geen koersdata gevonden voor dit symbool.")
             else:
                 current_price = float(data['Close'].iloc[-1])
                 earnings_date = get_earnings_info(ticker_obj)
@@ -60,7 +67,7 @@ if selected_stock and analyze_btn:
                 reg_model = LinearRegression().fit(X_reg, y_reg)
                 pred_price = float(reg_model.predict(np.array([[len(y_reg)]]))[0][0])
                 
-                # --- AI METHODE: Momentum (LSTM-sim) ---
+                # --- AI METHODE: Momentum Score ---
                 last_5_days = data['Close'].iloc[-5:].pct_change().sum()
                 lstm_score = int(68 + (last_5_days * 160))
                 
@@ -71,6 +78,8 @@ if selected_stock and analyze_btn:
                 ema_down = down.ewm(com=13, adjust=False).mean()
                 rs = ema_up / (ema_down + 1e-9)
                 rsi = float(100 - (100 / (1 + rs.iloc[-1])))
+                
+                # Score berekening
                 ensemble_score = int(70 + (10 if pred_price > current_price else -10) + (12 if rsi < 45 else 0))
 
                 # Hulpcijfer: ATR
@@ -85,13 +94,12 @@ if selected_stock and analyze_btn:
                 c3.metric("AI Ensemble", f"{ensemble_score}%")
                 c4.metric("RSI (14d)", f"{rsi:.1f}")
 
-                # Koersgrafiek met Trend
-                
+                # Koersgrafiek
                 chart_data = data[['Close']].copy()
-                chart_data['AI Trend'] = reg_model.predict(X_reg)
+                chart_data['AI Trendlijn'] = reg_model.predict(X_reg)
                 st.line_chart(chart_data)
 
-                # --- STRATEGIE TABEL MET HIGHLIGHTING ---
+                # --- STRATEGIE TABEL MET GROENE HIGHLIGHT ---
                 st.subheader("🚀 Multi-Method Strategy Scoreboard")
                 
                 def get_row(name, cat, score_val, signal_desc, target):
@@ -106,25 +114,26 @@ if selected_stock and analyze_btn:
 
                 strategies = [
                     get_row("Ensemble Learning", "AI", ensemble_score, f"Betrouwbaarheid: {ensemble_score}%", current_price + (3*atr)),
-                    get_row("LSTM Momentum", "AI", lstm_score, "Momentum Kracht", current_price + (4*atr)),
-                    get_row("Trend Regressie", "Tech", int(80 if pred_price > current_price else 40), f"Trend Doel: ${pred_price:.2f}", pred_price),
-                    get_row("RSI Swing", "Tech", int(85 if rsi < 35 else 50), f"RSI Waarde: {rsi:.1f}", current_price + (2.5*atr))
+                    get_row("Momentum AI", "AI", lstm_score, "Koersversnelling", current_price + (4*atr)),
+                    get_row("Regressie Trend", "Tech", int(82 if pred_price > current_price else 45), f"Trend Doel: ${pred_price:.2f}", pred_price),
+                    get_row("RSI Indicator", "Tech", int(88 if rsi < 35 else 50), f"Oververkocht bij {rsi:.1f}", current_price + (2*atr))
                 ]
                 
                 df_all = pd.DataFrame(strategies)
 
-                # CSS voor de groene rij bij score > 75
-                def highlight_high_scores(row):
+                # Highlighting functie voor scores boven de 75
+                def highlight_rows(row):
                     if row['Score'] >= 75:
                         return ['background-color: #00C851; color: white; font-weight: bold'] * len(row)
                     return [''] * len(row)
 
-                st.table(df_all.style.apply(highlight_high_scores, axis=1))
+                st.table(df_all.style.apply(highlight_rows, axis=1))
 
     except Exception as e:
-        st.error(f"Fout tijdens analyse: {e}")
+        st.error(f"Er is een fout opgetreden: {e}")
 else:
     st.info("👈 Selecteer een aandeel en klik op 'START AI ANALYSE'.")
+
 
 
 
