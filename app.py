@@ -2,63 +2,104 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import nltk
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+from sklearn.ensemble import RandomForestRegressor
+import plotly.graph_objects as go
+from datetime import datetime, timedelta
 import io
-# ... (overige imports blijven gelijk)
 
-# --- FUNCTIE: BATCH EXPORT ---
-def generate_excel_report(watchlist):
-    report_data = []
-    
-    progress_bar = st.sidebar.progress(0)
-    for i, ticker in enumerate(watchlist):
-        try:
-            # Data ophalen
-            stock = yf.Ticker(ticker)
-            df = stock.history(period="1y")
-            if df.empty: continue
-            
-            # AI Score berekenen (versnelde versie voor export)
-            current_price = df['Close'].iloc[-1]
-            news = stock.news
-            sent_score = analyze_sentiment(news)
-            
-            # Simpele trend indicator voor het rapport
-            price_change = ((df['Close'].iloc[-1] - df['Close'].iloc[-20]) / df['Close'].iloc[-20]) * 100
-            
-            # De score logica
-            final_score = min(max(50 + (price_change * 2) + (sent_score * 20), 0), 100)
-            
-            report_data.append({
-                "Ticker": ticker,
-                "Huidige Prijs": round(current_price, 2),
-                "AI Score": round(final_score, 1),
-                "Sentiment": round(sent_score, 2),
-                "20d Trend (%)": round(price_change, 2),
-                "Datum": datetime.now().strftime("%d-%m-%Y")
-            })
-        except Exception as e:
-            st.error(f"Fout bij {ticker}: {e}")
-        
-        progress_bar.progress((i + 1) / len(watchlist))
-    
-    return pd.DataFrame(report_data)
+# 1. INITIALISATIE (Dit moet bovenaan!)
+if 'watchlist' not in st.session_state:
+    st.session_state.watchlist = ["AAPL", "NVDA", "TSLA", "ASML.AS"]
 
-# --- SIDEBAR UPGRADE ---
+try:
+    nltk.download('vader_lexicon', quiet=True)
+    sia = SentimentIntensityAnalyzer()
+except:
+    pass
+
+# 2. FUNCTIES
+def get_data_and_news(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="1y")
+        news = stock.news
+        calendar = stock.calendar
+        next_earn = "Onbekend"
+        if calendar is not None and not calendar.empty:
+            next_earn = calendar.iloc[0, 0].strftime('%d-%m-%Y')
+        return df, news, next_earn
+    except:
+        return pd.DataFrame(), [], "Fout"
+
+def analyze_sentiment(news_list):
+    if not news_list: return 0
+    scores = [sia.polarity_scores(n['title'])['compound'] for n in news_list[:5]]
+    return np.mean(scores)
+
+def train_ai_models(df):
+    if df.empty: return 0, 0
+    df_clean = df[['Close']].copy()
+    df_clean['Target'] = df_clean['Close'].shift(-1)
+    df_clean.dropna(inplace=True)
+    rf = RandomForestRegressor(n_estimators=50).fit(df_clean[['Close']][:-1], df_clean['Target'][:-1])
+    last_price = df_clean['Close'].iloc[-1]
+    pred_rf = rf.predict(np.array([[last_price]]))[0]
+    return pred_rf, last_price
+
+# 3. UI LAYOUT
+st.title("🤖 AI Stock Intelligence Dashboard")
+
 with st.sidebar:
+    st.header("⭐ Watchlist")
+    new_ticker = st.text_input("Voeg Ticker toe:").upper()
+    if st.button("Toevoegen") and new_ticker:
+        if new_ticker not in st.session_state.watchlist:
+            st.session_state.watchlist.append(new_ticker)
+            st.rerun()
+    
+    selected_stock = st.selectbox("Kies een aandeel:", st.session_state.watchlist)
+    
     st.markdown("---")
-    st.header("📂 Rapportage")
-    if st.button("Genereer Watchlist Rapport"):
-        with st.spinner("Alle aandelen worden geanalyseerd..."):
-            report_df = generate_excel_report(st.session_state.watchlist)
-            
-            # Excel buffer maken
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                report_df.to_excel(writer, index=False, sheet_name='AI_Scores')
-            
-            st.download_button(
-                label="📥 Download Excel Rapport",
-                data=buffer.getvalue(),
-                file_name=f"Stock_AI_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    if st.button("🗑️ Wis Watchlist"):
+        st.session_state.watchlist = ["AAPL"]
+        st.rerun()
+
+# 4. HOOFDSCHERM LOGICA
+if selected_stock:
+    df, news, earnings_date = get_data_and_news(selected_stock)
+    
+    if not df.empty:
+        pred_price, current_price = train_ai_models(df)
+        sent_score = analyze_sentiment(news)
+        
+        # AI Score Logica
+        price_diff = (pred_price - current_price) / current_price
+        final_score = min(max(50 + (price_diff * 500) + (sent_score * 20), 0), 100)
+
+        # Statistieken
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Huidige Koers", f"${current_price:.2f}")
+        c2.metric("Earnings Datum", earnings_date)
+        c3.metric("AI Vertrouwen", f"{final_score:.1f}/100")
+
+        # Signaal
+        if final_score >= 75: st.success("🚀 STERK KOOP SIGNAAL")
+        elif final_score <= 25: st.error("⚠️ VERKOOP SIGNAAL")
+        else: st.info("⚖️ NEUTRAAL HOUDEN")
+
+        # Grafiek
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df.index[-60:], y=df['Close'][-60:], name="Koers"))
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.error("Kon geen data ophalen voor dit aandeel.")
+else:
+    st.info("Selecteer een aandeel in de sidebar om te beginnen.")
+
+# 5. RAPPORTAGE (Onderaan om fouten te voorkomen)
+st.sidebar.markdown("---")
+if st.sidebar.button("📊 Genereer Rapport"):
+    st.sidebar.write("Bezig met analyseren...")
+    # Hier kun je de Excel logica plaatsen zoals in het vorige bericht
