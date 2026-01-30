@@ -8,119 +8,103 @@ from datetime import datetime, timedelta
 
 # --- 1. CONFIGURATIE ---
 API_KEY = "d5h3vm9r01qll3dlm2sgd5h3vm9r01qll3dlm2t0"
-st.set_page_config(page_title="AI Finnhub Dashboard", layout="wide")
+st.set_page_config(page_title="AI Finnhub Terminal", layout="wide")
 
 if 'watchlist' not in st.session_state:
     st.session_state.watchlist = ["AAPL", "NVDA", "TSLA", "MSFT"]
 
-# --- 2. FINNHUB API FUNCTIES ---
+# --- 2. FINNHUB API FUNCTIE (Met extra veiligheid) ---
 def get_finnhub_data(ticker):
-    # Basis koers data
-    quote = requests.get(f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={API_KEY}").json()
+    base_url = "https://finnhub.io/api/v1"
     
-    # Kaars data (laatste 100 dagen)
+    # 1. Quote (Huidige prijs)
+    q = requests.get(f"{base_url}/quote?symbol={ticker}&token={API_KEY}").json()
+    
+    # 2. Candles (Historie voor AI)
     end = int(datetime.now().timestamp())
-    start = int((datetime.now() - timedelta(days=150)).timestamp())
-    candles = requests.get(f"https://finnhub.io/api/v1/stock/candle?symbol={ticker}&resolution=D&from={start}&to={end}&token={API_KEY}").json()
+    start = int((datetime.now() - timedelta(days=100)).timestamp())
+    c = requests.get(f"{base_url}/stock/candle?symbol={ticker}&resolution=D&from={start}&to={end}&token={API_KEY}").json()
     
-    # Earnings data
-    earnings = requests.get(f"https://finnhub.io/api/v1/stock/earnings?symbol={ticker}&token={API_KEY}").json()
+    # 3. Sentiment (Optioneel, Finnhub geeft dit niet voor alle kleine tickers)
+    s = requests.get(f"{base_url}/news-sentiment?symbol={ticker}&token={API_KEY}").json()
     
-    # News Sentiment
-    sentiment = requests.get(f"https://finnhub.io/api/v1/news-sentiment?symbol={ticker}&token={API_KEY}").json()
+    # 4. Basic Financials (voor Earnings datum)
+    f = requests.get(f"{base_url}/stock/metric?symbol={ticker}&metric=all&token={API_KEY}").json()
     
-    return quote, candles, earnings, sentiment
+    return q, c, s, f
 
-# --- 3. AI MODEL (Ensemble) ---
-def run_ai_logic(candles):
-    if 'c' not in candles: return None, None
-    df = pd.DataFrame({'Close': candles['c']})
-    df['Target'] = df['Close'].shift(-1)
-    train = df.dropna()
-    
-    X = train[['Close']].values
-    y = train['Target'].values
-    
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X, y)
-    
-    current_price = df['Close'].iloc[-1]
-    prediction = model.predict([[current_price]])[0]
-    return prediction, current_price
-
-# --- 4. DASHBOARD UI ---
-st.title("🚀 Finnhub AI Trading Terminal")
+# --- 3. DASHBOARD LOGICA ---
+st.title("📈 AI Trading Terminal (Finnhub Powered)")
 
 with st.sidebar:
     st.header("⭐ Watchlist")
-    new_stock = st.text_input("Voeg USA Ticker toe:").upper()
+    new_stock = st.text_input("Voeg Ticker toe (USA):").upper()
     if st.button("Toevoegen") and new_stock:
         st.session_state.watchlist.append(new_stock)
         st.rerun()
-    
-    selected_stock = st.selectbox("Selecteer aandeel:", st.session_state.watchlist)
+    selected_stock = st.selectbox("Analyseer:", st.session_state.watchlist)
 
 if selected_stock:
-    with st.spinner('Finnhub data ophalen...'):
-        quote, candles, earnings, sentiment = get_finnhub_data(selected_stock)
+    q, c, s, f = get_finnhub_data(selected_stock)
+    
+    # Check of we basisdata hebben
+    if q and 'c' in q and q['c'] != 0:
+        current_price = q['c']
         
-        if 'c' in candles:
-            pred_price, current_price = run_ai_logic(candles)
-            
-            # Sentiment berekening
-            sent_val = sentiment.get('sentiment', {}).get('bullishPercent', 0.5) if sentiment else 0.5
-            
-            # AI Score (Prijsactie + Finnhub Sentiment)
-            price_move = (pred_price - current_price) / current_price
-            ai_score = (50 + (price_move * 500)) * 0.7 + (sent_val * 100) * 0.3
-            ai_score = min(max(ai_score, 0), 100)
+        # Sentiment veiligstellen
+        # In het gratis plan is 'bullishPercent' soms 'None', we zetten het dan op 50%
+        try:
+            bullish_pct = s['sentiment']['bullishPercent'] if s and 'sentiment' in s else 0.5
+            if bullish_pct is None: bullish_pct = 0.5
+        except:
+            bullish_pct = 0.5
 
-            # Statistieken
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Prijs", f"${current_price:.2f}")
-            
-            # Earnings Datum
-            next_earn = earnings[0]['period'] if earnings else "N/A"
-            c2.metric("Earnings Periode", next_earn)
-            
-            # Sentiment Gauge
-            c3.metric("Bullish Sentiment", f"{sent_val*100:.0f}%")
-            c4.metric("Totaal AI Score", f"{ai_score:.1f}/100")
-
-            # --- VISUALISATIE ---
-            st.subheader("Marktanalyse & Sentiment")
-            col_left, col_right = st.columns([2, 1])
-
-            with col_left:
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=list(range(len(candles['c']))), y=candles['c'], name="Koers", line=dict(color='#00ff88')))
-                fig.update_layout(title=f"Koersverloop {selected_stock}", template="plotly_dark")
-                st.plotly_chart(fig, use_container_width=True)
-
-            with col_right:
-                # Sentiment Meter (Gauge Chart)
-                fig_gauge = go.Figure(go.Indicator(
-                    mode = "gauge+number",
-                    value = ai_score,
-                    title = {'text': "AI Rating"},
-                    gauge = {
-                        'axis': {'range': [0, 100]},
-                        'bar': {'color': "gold"},
-                        'steps': [
-                            {'range': [0, 40], 'color': "red"},
-                            {'range': [40, 70], 'color': "gray"},
-                            {'range': [70, 100], 'color': "green"}]}))
-                st.plotly_chart(fig_gauge, use_container_width=True)
-
-            # Handels Signaal
-            if ai_score > 75:
-                st.success(f"### 📈 STERK KOOP SIGNAAL: De AI voorziet een stijging naar ${pred_price:.2f}")
-            elif ai_score < 35:
-                st.error(f"### 📉 VERKOOP SIGNAAL: Finnhub data wijst op neerwaartse druk.")
-            else:
-                st.info("### ⚖️ NEUTRAAL: Geen duidelijke trend gedetecteerd.")
-
+        # AI Voorspelling (Simpel Ensemble op basis van recente kaarsen)
+        if 'c' in c:
+            df = pd.DataFrame({'price': c['c']})
+            df['next'] = df['price'].shift(-1)
+            X = df[['price']].iloc[:-1]
+            y = df['next'].iloc[:-1]
+            model = RandomForestRegressor(n_estimators=50).fit(X, y)
+            pred_price = model.predict([[current_price]])[0]
         else:
-            st.error("Kon geen data ophalen. Controleer of de API-key nog geldig is of de limiet bereikt is.")
+            pred_price = current_price
+
+        # Score berekening
+        ai_score = (bullish_pct * 100 * 0.4) + (50 + (pred_price - current_price) / current_price * 1000) * 0.6
+        ai_score = min(max(ai_score, 0), 100)
+
+        # UI: Metrieken
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Huidige Koers", f"${current_price:.2f}")
+        
+        # Earnings datum uit de financials halen
+        earn_date = f.get('metric', {}).get('earningsReleaseDate', 'Binnenkort')
+        col2.metric("Earnings Verwacht", earn_date)
+        col3.metric("AI Score", f"{ai_score:.1f}/100")
+
+        # Visualisatie
+        st.subheader("Analyse & Signaal")
+        left, right = st.columns([2, 1])
+        
+        with left:
+            if 'c' in c:
+                fig = go.Figure(data=[go.Candlestick(x=list(range(len(c['c']))),
+                                open=c['o'], high=c['h'], low=c['l'], close=c['c'])])
+                fig.update_layout(template="plotly_dark", height=400)
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with right:
+            st.write("### AI Rating")
+            if ai_score >= 70: st.success("🚀 STERK KOOP")
+            elif ai_score <= 30: st.error("⚠️ VERKOOP")
+            else: st.info("⚖️ NEUTRAAL")
+            
+            st.write(f"**Bullish Sentiment:** {bullish_pct*100:.1f}%")
+            st.write(f"**AI Koersdoel:** ${pred_price:.2f}")
+
+    else:
+        st.warning(f"Geen live data voor {selected_stock}. Dit kan gebeuren als de beurs gesloten is of de ticker incorrect is.")
+
 
 
