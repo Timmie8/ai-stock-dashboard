@@ -6,9 +6,9 @@ from sklearn.linear_model import LinearRegression
 from datetime import datetime
 
 # --- 1. CONFIGURATIE ---
-st.set_page_config(page_title="AI Strategy Terminal", layout="wide")
+st.set_page_config(page_title="AI Pro Strategy Terminal", layout="wide")
 
-# Custom CSS voor de gekleurde boxen (Glow effect bij hoge scores)
+# Custom CSS voor de gekleurde boxen bovenaan
 st.markdown("""
     <style>
     .metric-container {
@@ -57,7 +57,7 @@ with st.sidebar:
 # --- 4. HOOFD DASHBOARD ---
 if selected_stock and analyze_btn:
     try:
-        with st.spinner(f'AI Analyseert {selected_stock}...'):
+        with st.spinner(f'AI berekent strategieën voor {selected_stock}...'):
             ticker_obj = yf.Ticker(selected_stock)
             data = ticker_obj.history(period="200d")
             
@@ -67,7 +67,7 @@ if selected_stock and analyze_btn:
                 current_price = float(data['Close'].iloc[-1])
                 earnings_date = get_earnings_info(ticker_obj)
                 
-                # AI BEREKENINGEN
+                # --- AI BEREKENINGEN ---
                 y_reg = data['Close'].values.reshape(-1, 1)
                 X_reg = np.array(range(len(y_reg))).reshape(-1, 1)
                 reg_model = LinearRegression().fit(X_reg, y_reg)
@@ -76,33 +76,35 @@ if selected_stock and analyze_btn:
                 last_5_days = data['Close'].iloc[-5:].pct_change().sum()
                 momentum_score = int(68 + (last_5_days * 160))
                 
+                # RSI voor Swing
                 delta = data['Close'].diff()
                 up, down = delta.clip(lower=0), -1 * delta.clip(upper=0)
                 ema_up = up.ewm(com=13, adjust=False).mean()
                 ema_down = down.ewm(com=13, adjust=False).mean()
                 rs = ema_up / (ema_down + 1e-9)
                 rsi = float(100 - (100 / (1 + rs.iloc[-1])))
+                
                 ensemble_score = int(70 + (10 if pred_price > current_price else -10) + (12 if rsi < 45 else 0))
+
+                # Extra indicatoren voor Breakout & Reversal
+                recent_high = float(data['High'].iloc[-22:-1].max())
+                sma50 = float(data['Close'].rolling(window=50).mean().iloc[-1])
+                atr = (data['High'] - data['Low']).rolling(14).mean().iloc[-1]
 
                 # --- BOVENSTE RIJ: METRIC CARDS ---
                 st.subheader(f"Dashboard: {selected_stock}")
                 col1, col2, col3, col4 = st.columns(4)
                 
-                # Koers
                 price_chg = ((current_price / data['Close'].iloc[-2]) - 1) * 100
                 col1.metric("Huidige Koers", f"${current_price:.2f}", f"{price_chg:.2f}%")
-                
-                # Earnings
                 col2.metric("Earnings Datum", earnings_date)
                 
-                # AI Ensemble Card (Groen als >= 75)
                 ens_class = "metric-green" if ensemble_score >= 75 else ""
                 col3.markdown(f"""<div class="metric-container {ens_class}">
                     <p style='margin:0;font-size:14px;color:#aaa;'>AI Ensemble</p>
                     <h2 style='margin:0;color:white;'>{ensemble_score}%</h2>
                     </div>""", unsafe_allow_html=True)
                 
-                # Momentum AI Card (Groen als >= 75)
                 mom_class = "metric-green" if momentum_score >= 75 else ""
                 col4.markdown(f"""<div class="metric-container {mom_class}">
                     <p style='margin:0;font-size:14px;color:#aaa;'>Momentum AI</p>
@@ -110,28 +112,40 @@ if selected_stock and analyze_btn:
                     </div>""", unsafe_allow_html=True)
 
                 st.markdown("---")
+                st.line_chart(data[['Close']])
 
-                # GRAFIEK
-                
-                chart_data = data[['Close']].copy()
-                chart_data['AI Trend'] = reg_model.predict(X_reg)
-                st.line_chart(chart_data)
-
-                # TABEL
-                st.subheader("🚀 Strategy Scoreboard")
-                atr = (data['High'] - data['Low']).rolling(14).mean().iloc[-1]
+                # --- UITGEBREIDE STRATEGIE TABEL ---
+                st.subheader("🚀 Comprehensive Strategy Scoreboard")
                 
                 strategies = [
-                    {"Methode": "Ensemble Learning", "Score": ensemble_score, "Status": "BUY" if ensemble_score >= 75 else "HOLD", "Target": f"${current_price + (3*atr):.2f}"},
-                    {"Methode": "Momentum AI", "Score": momentum_score, "Status": "BUY" if momentum_score >= 75 else "HOLD", "Target": f"${current_price + (4*atr):.2f}"},
-                    {"Methode": "Regressie Trend", "Score": 82 if pred_price > current_price else 45, "Status": "BUY" if pred_price > current_price else "HOLD", "Target": f"${pred_price:.2f}"}
+                    # AI Methodes
+                    {"Categorie": "AI", "Methode": "Ensemble Learning", "Score": ensemble_score, "Status": "BUY" if ensemble_score >= 75 else "HOLD", "Target": f"${current_price + (3*atr):.2f}"},
+                    {"Categorie": "AI", "Methode": "Momentum AI", "Score": momentum_score, "Status": "BUY" if momentum_score >= 75 else "HOLD", "Target": f"${current_price + (4*atr):.2f}"},
+                    
+                    # Technische Methodes
+                    {"Categorie": "Tech", "Methode": "Trend Regressie", "Score": 82 if pred_price > current_price else 45, "Status": "BUY" if pred_price > current_price else "HOLD", "Target": f"${pred_price:.2f}"},
+                    
+                    # NIEUW: Swing Methode (gebaseerd op RSI)
+                    {"Categorie": "Tech", "Methode": "Swingtrade (RSI)", "Score": 85 if rsi < 35 else 50, "Status": "BUY" if rsi < 35 else "HOLD", "Target": f"${recent_high:.2f}"},
+                    
+                    # NIEUW: Breakout Methode (gebaseerd op 21-daags hoogpunt)
+                    {"Categorie": "Tech", "Methode": "Breakout", "Score": 90 if current_price >= recent_high else 40, "Status": "BUY" if current_price >= recent_high else "HOLD", "Target": f"${current_price + (3*atr):.2f}"},
+                    
+                    # NIEUW: Reversal Methode (Mean Reversion naar SMA50)
+                    {"Categorie": "Tech", "Methode": "Reversal", "Score": 80 if current_price < (sma50 * 0.93) else 45, "Status": "BUY" if current_price < (sma50 * 0.93) else "HOLD", "Target": f"${sma50:.2f}"}
                 ]
                 
-                df = pd.DataFrame(strategies)
-                st.table(df.style.apply(lambda x: ['background-color: #00C851; color: white; font-weight: bold' if x.Score >= 75 else '' for i in x], axis=1))
+                df_strat = pd.DataFrame(strategies)
+
+                def style_row(row):
+                    if row.Score >= 75:
+                        return ['background-color: #00C851; color: white; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+
+                st.table(df_strat.style.apply(style_row, axis=1))
 
     except Exception as e:
-        st.error(f"Fout: {e}")
+        st.error(f"Fout bij analyse: {e}")
 
 
 
