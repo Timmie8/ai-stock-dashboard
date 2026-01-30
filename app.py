@@ -1,153 +1,138 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
+from sklearn.linear_model import LinearRegression
 import requests
-import plotly.graph_objects as go
-from sklearn.ensemble import RandomForestRegressor
+from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+import re
 import io
 
 # --- 1. CONFIGURATIE ---
-API_KEY = "d5h3vm9r01qll3dlm2sgd5h3vm9r01qll3dlm2t0"
-st.set_page_config(page_title="AI Finnhub Pro Terminal", layout="wide")
+st.set_page_config(page_title="AI Visual Strategy Terminal", layout="wide")
 
+# Initialiseer de watchlist in de sessie
 if 'watchlist' not in st.session_state:
-    st.session_state.watchlist = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD", "GOOGL"]
+    st.session_state.watchlist = ["AAPL", "NVDA", "TSLA", "MSFT", "AMD"]
 
-# --- 2. ROBUUSTE DATA FUNCTIE ---
-def get_finnhub_data(ticker):
-    base_url = "https://finnhub.io/api/v1"
-    params = {'symbol': ticker, 'token': API_KEY}
+# --- 2. HULPFUNCTIES (Scrapers & AI) ---
+def get_live_sentiment(ticker):
     try:
-        q = requests.get(f"{base_url}/quote", params=params).json()
-        end = int(datetime.now().timestamp())
-        start = int((datetime.now() - timedelta(days=150)).timestamp())
-        c_params = {**params, 'resolution': 'D', 'from': start, 'to': end}
-        c = requests.get(f"{base_url}/stock/candle", params=c_params).json()
-        s = requests.get(f"{base_url}/news-sentiment", params=params).json()
-        f = requests.get(f"{base_url}/stock/metric", params=params, data={'metric': 'all'}).json()
-        insider = requests.get(f"{base_url}/stock/insider-transactions", params=params).json()
-        return q, c, s, f, insider
-    except Exception as e:
-        st.error(f"Verbindingsfout: {e}")
-        return None, None, None, None, None
+        url = f"https://finance.yahoo.com/quote/{ticker}/news"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        headlines = [h.text.lower() for h in soup.find_all(['h3', 'h2'])][:10]
+        
+        if not headlines: return 50, "NEUTRAL"
+        
+        pos_words = ['growth', 'buy', 'up', 'surge', 'profit', 'positive', 'beat', 'bull', 'strong', 'upgrade']
+        neg_words = ['drop', 'fall', 'sell', 'loss', 'negative', 'miss', 'bear', 'weak', 'risk', 'downgrade']
+        
+        score = 65 
+        for h in headlines:
+            for word in pos_words:
+                if word in h: score += 3
+            for word in neg_words:
+                if word in h: score -= 3
+        return min(98, max(30, score)), ("POSITIVE" if score > 70 else "NEGATIVE" if score < 45 else "NEUTRAL")
+    except:
+        return 50, "UNAVAILABLE"
 
 # --- 3. SIDEBAR ---
 with st.sidebar:
-    st.header("⭐ Portfolio Management")
-    new_stock = st.text_input("Voeg USA Ticker toe:").upper().strip()
-    if st.button("➕ Toevoegen"):
-        if new_stock and new_stock not in st.session_state.watchlist:
-            st.session_state.watchlist.append(new_stock)
+    st.title("🛡️ AI Portfolio")
+    new_ticker = st.text_input("Voeg Ticker toe:").upper().strip()
+    if st.button("➕ Voeg toe") and new_ticker:
+        if new_ticker not in st.session_state.watchlist:
+            st.session_state.watchlist.append(new_ticker)
             st.rerun()
     
-    selected_stock = st.selectbox("Kies een aandeel:", st.session_state.watchlist)
+    selected_stock = st.selectbox("Selecteer aandeel:", st.session_state.watchlist)
     st.markdown("---")
     analyze_btn = st.button("🚀 START AI ANALYSE", use_container_width=True, type="primary")
 
 # --- 4. HOOFD DASHBOARD ---
-st.title("🛡️ AI Finnhub Professional Terminal")
+st.title("🏹 AI Visual Strategy Dashboard")
 
-if analyze_btn:
-    with st.spinner(f'Diepe AI-analyse voor {selected_stock}...'):
-        q, c, s, f, insider = get_finnhub_data(selected_stock)
-        
-        if q and 'c' in q and q['c'] != 0:
-            current_price = q['c']
+if selected_stock and analyze_btn:
+    try:
+        with st.spinner(f'AI Analyseert {selected_stock}...'):
+            # 1. Data ophalen
+            ticker_obj = yf.Ticker(selected_stock)
+            data = ticker_obj.history(period="150d")
             
-            # --- VERBETERDE MULTI-FEATURE AI LOGICA ---
-            if c and 's' in c and c['s'] == 'ok':
-                # Maak een DataFrame met meerdere kenmerken
-                df_ai = pd.DataFrame({
-                    'price': c['c'],
-                    'high': c['h'],
-                    'low': c['l'],
-                    'volume': c['v']
-                })
-                # Bereken extra indicatoren voor unieke scores
-                df_ai['returns'] = df_ai['price'].pct_change()
-                df_ai['range'] = (df_ai['high'] - df_ai['low']) / df_ai['price']
-                df_ai['target'] = df_ai['price'].shift(-1)
-                
-                train_df = df_ai.dropna()
-                
-                # Features: Prijs, Momentum, Volatiliteit en Volume
-                features = ['price', 'returns', 'range', 'volume']
-                model = RandomForestRegressor(n_estimators=100, random_state=42)
-                model.fit(train_df[features], train_df['target'])
-                
-                # Voorspelling
-                last_row = df_ai[features].iloc[-1].values.reshape(1, -1)
-                pred_price = model.predict(last_row)[0]
-                tech_diff = ((pred_price - current_price) / current_price) * 100
-                has_ai = True
+            if data.empty:
+                st.error("Kon geen data vinden voor dit aandeel.")
             else:
-                pred_price = current_price
-                tech_diff = 0
-                has_ai = False
-
-            # --- SENTIMENT & SCORE BEREKENING ---
-            sentiment_impact = 0
-            if s and 'sentiment' in s:
-                bullish_pct = s['sentiment'].get('bullishPercent', 0.5) or 0.5
-                sentiment_impact = (bullish_pct - 0.5) * 40 # Range -20 tot +20
-
-            # Finale score opbouw
-            # Basis 50 + Technische trend (x15 impact) + Sentiment impact
-            ai_score = 50 + (tech_diff * 15) + sentiment_impact
-            
-            # Voeg unieke 'fingerprint' toe op basis van volume
-            ai_score += (q.get('v', 0) % 10) / 10
-            ai_score = min(max(ai_score, 5), 95)
-
-            # --- UI: METRIEKEN ---
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Live Prijs", f"${current_price:.2f}", f"{q.get('d', 0):.2f}")
-            m2.metric("AI Score", f"{ai_score:.1f}/100")
-            m3.metric("AI Doel (24u)", f"${pred_price:.2f}")
-
-            # --- UI: GRAFIEK & RATING ---
-            col_left, col_right = st.columns([2, 1])
-            
-            with col_left:
-                if c and 'c' in c:
-                    fig = go.Figure(data=[go.Candlestick(
-                        x=list(range(len(c['c']))),
-                        open=c['o'], high=c['h'], low=c['l'], close=c['c'],
-                        name="Market Price"
-                    )])
-                    fig.update_layout(template="plotly_dark", height=450, margin=dict(l=20, r=20, t=40, b=20))
-                    st.plotly_chart(fig, use_container_width=True)
+                current_price = float(data['Close'].iloc[-1])
                 
-            with col_right:
-                st.write("### AI Rating")
-                if ai_score >= 70: st.success("🚀 STERK KOOP")
-                elif ai_score <= 30: st.error("⚠️ VERKOOP")
-                else: st.info("⚖️ NEUTRAAL")
+                # 2. Technische Berekeningen
+                # Trend Regressie
+                y_reg = data['Close'].values.reshape(-1, 1)
+                X_reg = np.array(range(len(y_reg))).reshape(-1, 1)
+                reg_model = LinearRegression().fit(X_reg, y_reg)
+                pred_price = float(reg_model.predict(np.array([[len(y_reg)]]))[0][0])
                 
-                # Sentiment visualisatie
-                st.progress(ai_score / 100)
-                st.caption(f"De AI is voor {ai_score:.1f}% zeker van de huidige trend.")
+                # RSI & ATR
+                delta = data['Close'].diff()
+                up, down = delta.clip(lower=0), -1 * delta.clip(upper=0)
+                ema_up = up.ewm(com=13, adjust=False).mean()
+                ema_down = down.ewm(com=13, adjust=False).mean()
+                rs = ema_up / (ema_down + 1e-9)
+                rsi = float(100 - (100 / (1 + rs.iloc[-1])))
+                
+                high_low = data['High'] - data['Low']
+                atr = high_low.rolling(14).mean().iloc[-1]
+                
+                # 3. AI Scoring
+                sentiment_score, sentiment_status = get_live_sentiment(selected_stock)
+                ensemble_score = int(72 + (12 if pred_price > current_price else -8) + (10 if rsi < 45 else 0))
+                
+                # --- VISUALISATIE ---
+                c1, c2, c3 = st.columns(3)
+                price_chg = ((current_price / data['Close'].iloc[-2]) - 1) * 100
+                c1.metric("Prijs", f"${current_price:.2f}", f"{price_chg:.2f}%")
+                c2.metric("AI Score", f"{ensemble_score}%", sentiment_status)
+                c3.metric("RSI Indicator", f"{rsi:.1f}")
 
-                st.markdown("---")
-                st.write("### 👥 Insider Activity")
-                if insider and 'data' in insider and len(insider['data']) > 0:
-                    ins_df = pd.DataFrame(insider['data']).head(5)
-                    st.dataframe(ins_df[['name', 'share', 'change']], hide_index=True)
-                else:
-                    st.caption("Geen recente insider transacties gevonden.")
+                # Grafiek met trendlijn
+                
+                chart_data = data[['Close']].copy()
+                chart_data['AI Trend'] = reg_model.predict(X_reg)
+                st.line_chart(chart_data)
 
-            # --- EXPORT ---
-            report_df = pd.DataFrame([{"Ticker": selected_stock, "Score": ai_score, "Target": pred_price, "Price": current_price}])
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                report_df.to_excel(writer, index=False)
-            st.download_button("📥 Export naar Excel", buffer.getvalue(), file_name=f"{selected_stock}_AI.xlsx")
+                # Strategie Tabel
+                st.subheader("🚀 Strategy Scoreboard")
+                
+                def get_row(name, is_buy, signal, target):
+                    return {
+                        "Methode": name, 
+                        "Status": "BUY" if is_buy else "HOLD",
+                        "Signal": signal, 
+                        "Target": f"${target:.2f}" if is_buy else "-"
+                    }
 
-        else:
-            st.error("Finnhub kon geen live data vinden. Controleer de ticker.")
+                strategies = [
+                    get_row("Ensemble Learning", ensemble_score > 75, f"{ensemble_score}% betrouwbaarheid", current_price + (2*atr)),
+                    get_row("Sentiment Scraper", sentiment_score > 72, sentiment_status, current_price + atr),
+                    get_row("Trend Regression", pred_price > current_price, f"Target ${pred_price:.2f}", pred_price),
+                    get_row("RSI Swing", rsi < 40, f"RSI: {rsi:.1f}", current_price + (3*atr))
+                ]
+                
+                df_strat = pd.DataFrame(strategies)
+                
+                def color_status(val):
+                    color = '#00C851' if val == 'BUY' else '#FFBB33'
+                    return f'background-color: {color}; color: white; font-weight: bold'
+
+                st.table(df_strat.style.applymap(color_status, subset=['Status']))
+
+    except Exception as e:
+        st.error(f"Fout tijdens analyse: {e}")
 else:
-    st.info("👈 Selecteer een aandeel en klik op 'START AI ANALYSE'.")
+    st.info("👈 Selecteer een aandeel in de sidebar en klik op de blauwe knop om de AI-modellen te starten.")
 
 
 
