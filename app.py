@@ -16,7 +16,7 @@ st.markdown("""
         padding: 15px;
         border-radius: 10px;
         border-left: 5px solid #333;
-        min-height: 100px;
+        min-height: 110px;
     }
     .metric-green {
         border-left: 5px solid #00C851 !important;
@@ -58,7 +58,7 @@ with st.sidebar:
 # --- 4. HOOFD DASHBOARD ---
 if selected_stock and analyze_btn:
     try:
-        with st.spinner(f'AI berekent strategieën voor {selected_stock}...'):
+        with st.spinner(f'Modellen worden geladen voor {selected_stock}...'):
             ticker_obj = yf.Ticker(selected_stock)
             data = ticker_obj.history(period="200d")
             
@@ -90,9 +90,22 @@ if selected_stock and analyze_btn:
                 sma50 = float(data['Close'].rolling(window=50).mean().iloc[-1])
                 atr = (data['High'] - data['Low']).rolling(14).mean().iloc[-1]
 
-                # Bepaal of Tech op BUY staat (Trend, Swing of Breakout)
-                tech_buy = (pred_price > current_price) or (rsi < 35) or (current_price >= recent_high)
-                tech_status = "BUY" if tech_buy else "HOLD"
+                # --- TECH SIGNAL LOGICA VOOR BOVENBALK ---
+                tech_label = "HOLD"
+                tech_buy = False
+                
+                if current_price >= recent_high:
+                    tech_label = "BUY (Breakout)"
+                    tech_buy = True
+                elif rsi < 35:
+                    tech_label = "BUY (Swing)"
+                    tech_buy = True
+                elif pred_price > current_price:
+                    tech_label = "BUY (Trend)"
+                    tech_buy = True
+                elif current_price < (sma50 * 0.93):
+                    tech_label = "BUY (Reversal)"
+                    tech_buy = True
 
                 # --- BOVENSTE RIJ: METRIC CARDS ---
                 st.subheader(f"Dashboard: {selected_stock}")
@@ -116,20 +129,18 @@ if selected_stock and analyze_btn:
                     <h2 style='margin:0;color:white;'>{momentum_score}%</h2>
                     </div>""", unsafe_allow_html=True)
                 
-                # Tech Signal Card
+                # Tech Signal Card (Nu met dynamische naam)
                 tech_class = "metric-green" if tech_buy else ""
                 col5.markdown(f"""<div class="metric-container {tech_class}">
                     <p style='margin:0;font-size:14px;color:#aaa;'>Tech Signal</p>
-                    <h2 style='margin:0;color:white;'>{tech_status}</h2>
+                    <h2 style='margin:0;color:white;font-size:20px;'>{tech_label}</h2>
                     </div>""", unsafe_allow_html=True)
 
                 st.markdown("---")
                 
-                # Grafiek met Regressie Trendlijn
+                # Grafiek
                 
-                chart_data = data[['Close']].copy()
-                chart_data['Trendlijn'] = reg_model.predict(X_reg)
-                st.line_chart(chart_data)
+                st.line_chart(data[['Close']])
 
                 # --- STRATEGIE TABEL ---
                 st.subheader("🚀 Comprehensive Strategy Scoreboard")
@@ -154,6 +165,7 @@ if selected_stock and analyze_btn:
 
     except Exception as e:
         st.error(f"Fout bij analyse: {e}")
+
 
 
 
