@@ -13,6 +13,7 @@ st.set_page_config(page_title="AI Pro Strategy Terminal", layout="wide")
 USERS = {
     "admin@swingstocktraders.com": "SST2024!",
     "member@test.nl": "Welkom01",
+    "winstmaken@gmx.com": "winstmaken8"
     "jouwemail@domein.com": "wachtwoord123"
 }
 
@@ -201,6 +202,7 @@ else:
 
         except Exception as e:
             st.error(f"Fout bij analyse: {e}")
+
 
 
 
