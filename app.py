@@ -9,7 +9,6 @@ from datetime import datetime
 st.set_page_config(page_title="AI Pro Strategy Terminal", layout="wide")
 
 # --- LEDENLIJST (VOEG HIER JE LEDEN TOE) ---
-# Formaat: "email": "wachtwoord"
 USERS = {
     "admin@swingstocktraders.com": "SST2024!",
     "member@test.nl": "Welkom01",
@@ -17,7 +16,6 @@ USERS = {
     "jouwemail@domein.com": "wachtwoord123"
 }
 
-# Initialiseer login status
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 
@@ -42,7 +40,6 @@ def login_screen():
 if not st.session_state.logged_in:
     login_screen()
 else:
-    # Custom CSS voor de gekleurde boxen
     st.markdown("""
         <style>
         .metric-container {
@@ -56,13 +53,9 @@ else:
             border-left: 5px solid #00C851 !important;
             background-color: #06402B !important;
         }
-        .logout-btn {
-            float: right;
-        }
         </style>
         """, unsafe_allow_html=True)
 
-    # Logout optie in de sidebar
     with st.sidebar:
         st.write(f"Ingelogd als: **{st.session_state.user_email}**")
         if st.button("Uitloggen"):
@@ -89,14 +82,25 @@ else:
         except:
             return "Check Yahoo"
 
-    # --- 3. SIDEBAR ANALYSE ---
+    # --- 3. SIDEBAR ANALYSE (Aangepast voor meerdere tickers) ---
     with st.sidebar:
         st.title("🛡️ AI Portfolio")
-        new_ticker = st.text_input("Voeg Ticker toe:").upper().strip()
-        if st.button("➕ Voeg toe") and new_ticker:
-            if new_ticker not in st.session_state.watchlist:
-                st.session_state.watchlist.append(new_ticker)
+        # Helptekst toegevoegd voor duidelijkheid
+        input_string = st.text_input("Voeg Ticker(s) toe (bijv. AAPL, MSFT):")
+        
+        if st.button("➕ Voeg toe") and input_string:
+            # Splits de input op komma's
+            new_tickers = [t.strip().upper() for t in input_string.split(',')]
+            
+            added_count = 0
+            for ticker in new_tickers:
+                if ticker and ticker not in st.session_state.watchlist:
+                    st.session_state.watchlist.append(ticker)
+                    added_count += 1
+            
+            if added_count > 0:
                 st.rerun()
+
         selected_stock = st.selectbox("Selecteer aandeel:", st.session_state.watchlist)
         analyze_btn = st.button("🚀 START AI ANALYSE", use_container_width=True, type="primary")
 
@@ -113,7 +117,6 @@ else:
                     current_price = float(data['Close'].iloc[-1])
                     earnings_date = get_earnings_info(ticker_obj)
                     
-                    # --- ANALYSE BEREKENINGEN ---
                     y_reg = data['Close'].values.reshape(-1, 1)
                     X_reg = np.array(range(len(y_reg))).reshape(-1, 1)
                     reg_model = LinearRegression().fit(X_reg, y_reg)
@@ -135,7 +138,6 @@ else:
                     sma50 = float(data['Close'].rolling(window=50).mean().iloc[-1])
                     atr = (data['High'] - data['Low']).rolling(14).mean().iloc[-1]
 
-                    # --- TECH SIGNAL LOGICA ---
                     tech_label = "HOLD"
                     tech_buy = False
                     
@@ -152,7 +154,6 @@ else:
                         tech_label = "BUY (Reversal)"
                         tech_buy = True
 
-                    # --- UI WEERGAVE ---
                     st.subheader(f"Dashboard: {selected_stock}")
                     col1, col2, col3, col4, col5 = st.columns(5)
                     
@@ -202,6 +203,7 @@ else:
 
         except Exception as e:
             st.error(f"Fout bij analyse: {e}")
+
 
 
 
